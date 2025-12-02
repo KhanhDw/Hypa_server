@@ -1,0 +1,179 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+.ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+.DS_Store?
+ehthumbs.db
+Icon?
+.directory
+.Trashes
+*.nfs
+
+# Logs
+*.log
+logs/
+log/
+
+# Local config files
+.env
+.env.local
+.env.*.local
+.envrc
+*.env
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.coverage.xml
+
+# Testing
+.pytest_cache/
+.pytest_cache/*
+.pytest_cache/**/*
+
+# FastAPI / uvicorn
+*.sqlite3
+*.sqlite3-journal
+
+# node modules (if any frontend is added later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE specific
+.vscode/settings.json
+.idea/*
+
+# Environment specific
+.env.test
+.env.local
+.env.dev
+.env.production
+
+# Local run files
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+dist/
+build/
+*.manifest
+*.spec
+
+# Local config
+config.json
+secrets.json
+local_settings.py
+
+# Backup files
+*~
+*.bak
+*.tmp
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Git history
+.git/
+!.gitignore
+
+# Documentation
+docs/_build/
+
+# Coverage
+.coverage*
+
+# MyPy
+.mypy_cache/
+
+# Local run
+*.db
+*.sqlite
+
+# FastAPI specific
+uvicorn_error.log
+uvicorn_access.log
+
+# PyCharm
+.idea/
+
+# Platform files
+*.DS_Store
+.DS_Store
+Thumbs.db
+
+# Sensitive files that should not be committed
+*.pem
+*.key
+*.crt
+*.cert
+*.secret
+
+# Local data files
+data/
+*.csv
+*.json
+*.xml
+*.yaml
+*.yml
+
+# Cache directories
+.cache/
+.caches/
+*.cache
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Local storage
+storage/
+
+# User-specific settings
+settings.json
+local_config.py
