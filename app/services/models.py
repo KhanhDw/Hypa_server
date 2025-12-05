@@ -1,5 +1,5 @@
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -39,7 +39,7 @@ class Metadata:
     charset: Optional[str] = None
     cached: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict:
         """Convert the metadata to a dictionary representation"""
         return {
             "title": self.title,

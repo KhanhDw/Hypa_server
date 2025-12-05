@@ -1,22 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
+# Setup logging configuration
+from app.core.logging_config import setup_logging
+setup_logging(log_level="INFO", log_file="app.log")
+
+# Load application settings
+from app.core.config import settings
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Domain FE được phép truy cập API
-origins = [
-    "http://localhost:5173",   # Vite React chạy local
-    "https://hypa.app",        # FE production (ví dụ)
-]
-
-# CORS configuration
+# CORS configuration using settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Mở cho tất cả các domain (không an toàn cho production)
-    # allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.cors_allow_methods,
+    allow_headers=settings.cors_allow_headers,
 )
 
 # Import services after app initialization to avoid circular dependencies
@@ -26,11 +33,26 @@ from app.services.container import ServiceContainer
 service_container = ServiceContainer()
 metadata_service = service_container.get_metadata_service()
 
+from urllib.parse import urlparse
+
 # -------------------------------------------------------
 # Endpoint /metadata (Uses service layer)
 # -------------------------------------------------------
 @app.get("/metadata")
-async def metadata(url: str):
+@limiter.limit(settings.rate_limit_default)  # Use configured rate limit
+async def metadata(request: Request, url: str):
+    # Additional validation for URL parameter
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="URL parameter is required")
+
+    # Check if URL has valid format
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            raise HTTPException(status_code=400, detail="Invalid URL format")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid URL format")
+
     return await metadata_service.get_metadata(url)
 
 
