@@ -177,3 +177,9 @@ storage/
 # User-specific settings
 settings.json
 local_config.py
+
+#ffmpeg
+ffmpeg/bin/
+
+#nodejs
+nodejs/node_modules/*
