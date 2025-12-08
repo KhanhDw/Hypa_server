@@ -182,4 +182,4 @@ local_config.py
 ffmpeg/bin/
 
 #nodejs
-nodejs/node_modules/*
+nodejs/

@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Set up logging first
+from app.config.logging_config import setup_logging
+setup_logging()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 NODE_PATH = os.path.join(BASE_DIR, "nodejs")

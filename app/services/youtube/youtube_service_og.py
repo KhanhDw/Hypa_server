@@ -3,15 +3,21 @@ import trafilatura
 import re
 from app.utils.youtube_parser import extract_youtube_id
 from app.models.metadata_model import YouTubeMetadata
+from app.config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class YouTubeServiceOg:
 
     @staticmethod
     async def fetch_metadata(url: str) -> YouTubeMetadata:
+        logger.info(f"Fetching OG metadata for URL: {url}")
         video_id = extract_youtube_id(url)
         if not video_id:
-            raise ValueError("URL không phải là YouTube hợp lệ")
+            error_msg = "URL không phải là YouTube hợp lệ"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         headers = {
             "User-Agent": (
@@ -22,12 +28,22 @@ class YouTubeServiceOg:
         }
 
         # ---- Fetch HTML ----
-        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
-            res = await client.get(url)
-            html = res.text
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+                res = await client.get(url)
+                html = res.text
+                logger.info(f"Successfully fetched HTML for video ID: {video_id}")
+        except Exception as e:
+            logger.error(f"Error fetching HTML for {url}: {str(e)}")
+            raise
 
         # ---- Parse metadata ----
-        metadata = trafilatura.metadata.extract_metadata(html)
+        try:
+            metadata = trafilatura.metadata.extract_metadata(html)
+            logger.debug(f"Successfully extracted metadata for video ID: {video_id}")
+        except Exception as e:
+            logger.warning(f"Error extracting metadata with trafilatura for {video_id}: {str(e)}")
+            metadata = None
 
         title = None
         description = None
@@ -52,10 +68,12 @@ class YouTubeServiceOg:
 
         image = og_image or f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
 
-        return YouTubeMetadata(
+        result = YouTubeMetadata(
             video_id=video_id,
             title=title,
             description=description,
             image=image,
             url=og_url,
         )
+        logger.info(f"Successfully fetched OG metadata for video ID: {video_id}")
+        return result

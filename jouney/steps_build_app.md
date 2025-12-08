@@ -6,3 +6,4 @@
 6. cấu hình controller youtube
 7. cấu hinh router youtube
 8. cấu hình services youtube lấy og và detail và download video và audio
+9. gập lỗi với ffmpeg khi tải âm thanh và video, video không âm thanh, video có âm thanh
