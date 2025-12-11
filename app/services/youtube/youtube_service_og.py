@@ -2,7 +2,7 @@ import httpx
 import trafilatura
 import re
 from app.utils.youtube_parser import extract_youtube_id
-from app.models.metadata_model import YouTubeMetadata
+from app.models.youtube.youtube_metadata_model import YouTubeMetadata
 from app.config.logging_config import get_logger
 
 logger = get_logger(__name__)

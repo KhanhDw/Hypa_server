@@ -1,6 +1,6 @@
 import yt_dlp
 from pathlib import Path
-from app.models.metadata_model import YouTubeMetadata
+from app.models.youtube.youtube_metadata_model import YouTubeMetadata
 from app.services.youtube.youtube_config import YouTubeConfig
 from app.config.logging_config import get_logger
 

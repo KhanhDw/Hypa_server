@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Query
-from app.controllers.youtube_controller import YouTubeController
-from app.controllers.youtube_download_controller import YouTubeDownloadController
+from app.controllers.youtube.youtube_controller import YouTubeController
+from app.controllers.youtube.youtube_download_controller import YouTubeDownloadController
 from app.config.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("")
 async def get_metadata_detail(url: str = Query(...)):
     logger.info(f"Received request for detailed metadata: {url}")
     try:

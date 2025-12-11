@@ -7,5 +7,6 @@ echo Removing __pycache__ directories...
 for /d /r %%i in (__pycache__) do @if exist "%%i" rd /s /q "%%i"
 
 call venv\Scripts\activate.bat
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+@REM python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 # không dùng reload khi chạy thực tế
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 pause
