@@ -11,6 +11,7 @@ from .scraper_api import FacebookScraperAPI
 from .fetcher import PageFetcher
 from .extractor import DataExtractor
 from .task_engine import TaskEngine, SharedInMemoryCache
+from .large_batch_processor import LargeBatchProcessor
 
 __all__ = [
     'BrowserPool',
@@ -22,5 +23,6 @@ __all__ = [
     'PageFetcher',
     'DataExtractor',
     'TaskEngine',
-    'SharedInMemoryCache'
+    'SharedInMemoryCache',
+    'LargeBatchProcessor'
 ]

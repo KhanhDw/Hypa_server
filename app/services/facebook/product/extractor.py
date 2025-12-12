@@ -40,7 +40,11 @@ class DataExtractor:
                 images: [],
                 videos: []
             };
-            document.querySelectorAll('meta').forEach(m => {
+            // Optimize by limiting the number of meta tags processed
+            const metaElements = document.querySelectorAll('meta');
+            // Only process first 50 meta tags to improve performance
+            for (let i = 0; i < Math.min(metaElements.length, 50); i++) {
+                const m = metaElements[i];
                 const prop = m.getAttribute('property') || m.getAttribute('name');
                 const content = m.getAttribute('content');
                 if (prop && content) {
@@ -48,15 +52,20 @@ class DataExtractor:
                     if (prop.startsWith('og:')) result.og_data[prop.substring(3)] = content;
                     else if (prop.startsWith('twitter:')) result.twitter_data[prop.substring(8)] = content;
                 }
-            });
-            document.querySelectorAll('img[src]').forEach(img => {
+            }
+            // Limit image and video extraction for performance
+            const imgElements = document.querySelectorAll('img[src]');
+            for (let i = 0; i < Math.min(imgElements.length, 10); i++) {
+                const img = imgElements[i];
                 try {
                     if (img.src && img.src.startsWith('http')) result.images.push({src: img.src, alt: img.alt || ''});
                 } catch(e){}
-            });
-            document.querySelectorAll('video[src]').forEach(v => {
+            }
+            const videoElements = document.querySelectorAll('video[src]');
+            for (let i = 0; i < Math.min(videoElements.length, 5); i++) {
+                const v = videoElements[i];
                 try { if (v.src) result.videos.push(v.src); } catch(e){}
-            });
+            }
             return result;
         }""")
 
@@ -76,8 +85,10 @@ class DataExtractor:
                 json_ld: []
             };
             
-            // Extract metadata
-            document.querySelectorAll('meta').forEach(m => {
+            // Extract metadata with limit for performance
+            const metaElements = document.querySelectorAll('meta');
+            for (let i = 0; i < Math.min(metaElements.length, 50); i++) {
+                const m = metaElements[i];
                 const prop = m.getAttribute('property') || m.getAttribute('name');
                 const content = m.getAttribute('content');
                 if (prop && content) {
@@ -85,25 +96,27 @@ class DataExtractor:
                     if (prop.startsWith('og:')) result.og_data[prop.substring(3)] = content;
                     else if (prop.startsWith('twitter:')) result.twitter_data[prop.substring(8)] = content;
                 }
-            });
+            }
             
-            // Extract images and videos
-            document.querySelectorAll('img[src]').forEach(img => {
+            // Extract images and videos with limits
+            const imgElements = document.querySelectorAll('img[src]');
+            for (let i = 0; i < Math.min(imgElements.length, 10); i++) {
+                const img = imgElements[i];
                 try {
                     if (img.src && img.src.startsWith('http')) result.images.push({src: img.src, alt: img.alt || ''});
                 } catch(e){}
-            });
-            document.querySelectorAll('video[src]').forEach(v => {
+            }
+            const videoElements = document.querySelectorAll('video[src]');
+            for (let i = 0; i < Math.min(videoElements.length, 5); i++) {
+                const v = videoElements[i];
                 try { if (v.src) result.videos.push(v.src); } catch(e){}
-            });
+            }
             
-            // Extract article text with optimized selectors
+            // Extract article text with optimized selectors - try fewer selectors
             const selectors = [
                 'article',
                 '[role="article"]',
                 'div[data-testid="post_message"]',
-                'div[data-ad-preview="message"]',
-                'div[data-ft]',
                 'main'
             ];
             
@@ -123,10 +136,11 @@ class DataExtractor:
                 }
             }
             
-            // Extract JSON-LD
-            document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
-                try { result.json_ld.push(JSON.parse(s.textContent)); } catch(e){}
-            });
+            // Extract JSON-LD with limit
+            const jsonLdElements = document.querySelectorAll('script[type="application/ld+json"]');
+            for (let i = 0; i < Math.min(jsonLdElements.length, 5); i++) {
+                try { result.json_ld.push(JSON.parse(jsonLdElements[i].textContent)); } catch(e){}
+            }
             
             return result;
         }

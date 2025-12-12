@@ -30,10 +30,10 @@ class AdaptiveThrottler:
     """
     
     def __init__(self, 
-                 base_delay: float = 0.1,  # Base delay in seconds
-                 max_delay: float = 5.0,   # Maximum delay in seconds
-                 latency_threshold: float = 3.0,  # Threshold for latency-based throttling
-                 cache_miss_threshold: float = 0.7,  # Threshold for cache miss rate
+                 base_delay: float = 0.05,  # Reduced base delay for better throughput
+                 max_delay: float = 3.0,    # Reduced max delay for better responsiveness
+                 latency_threshold: float = 2.0,  # Lower threshold for faster response
+                 cache_miss_threshold: float = 0.6,  # Lower threshold for cache misses
                  memory_threshold: float = 800.0):  # Memory threshold in MB
     
         self.base_delay = base_delay
@@ -48,10 +48,10 @@ class AdaptiveThrottler:
         self.rate_limit_events = []
         self.memory_usage = []
         
-        # Window sizes for calculation
-        self.duration_window_size = 20
-        self.event_window_size = 30
-        self.memory_window_size = 10
+        # Window sizes for calculation - adjusted for large batch processing
+        self.duration_window_size = 15  # Smaller window for faster adaptation
+        self.event_window_size = 20    # Smaller window for faster adaptation
+        self.memory_window_size = 8    # Smaller window for faster adaptation
         
         # Current throttle state
         self.current_delay = base_delay

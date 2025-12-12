@@ -27,14 +27,14 @@ class AsyncFacebookScraperStreaming:
     def __init__(self,
                  headless: bool = True,
                  max_concurrent: int = 6,
-                 cache_ttl: int = 300,
-                 enable_images: bool = True,
+                 cache_ttl: int = 600,  # Increased from 300 to 600 seconds
+                 enable_images: bool = False,  # Set to False for better performance
                  mode: str = "simple",
                  redis_url: Optional[str] = None,
                  use_browser_pool: bool = True,
                  max_pages_per_context: int = 5,
                  max_contexts: int = 5,
-                 context_reuse_limit: int = 20):
+                 context_reuse_limit: int = 250):  # Increased from 20 to 250
         self.mode = mode
         self.headless = headless
         self.max_concurrent = max_concurrent
@@ -98,27 +98,31 @@ class AsyncFacebookScraperStreaming:
             args.extend(['--blink-settings=imagesEnabled=false', '--disable-images'])
         return args
 
-    async def get_facebook_metadata(self, url: str) -> Dict[str, Any]:
+    async def get_facebook_metadata(self, url: str, mode: str = None) -> Dict[str, Any]:
         """Public method with layered cache and rate limiting - now uses new architecture"""
         if not self.task_engine:
             raise RuntimeError("Task engine not initialized")
             
-        result = await self.task_engine.get_facebook_metadata(url, mode=self.mode)
+        # Use provided mode or default to instance mode
+        selected_mode = mode or self.mode
+        result = await self.task_engine.get_facebook_metadata(url, mode=selected_mode)
         # Update stats from task engine
         self.stats = self.task_engine.get_engine_stats()
         return result
 
-    async def get_multiple_metadata_streaming(self, urls: List[str]) -> AsyncGenerator[Dict[str, Any], None]:
+    async def get_multiple_metadata_streaming(self, urls: List[str], mode: str = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream results as they complete (deduped). Now uses task engine."""
         if not self.task_engine:
             raise RuntimeError("Task engine not initialized")
             
+        # Use provided mode or default to instance mode
+        selected_mode = mode or self.mode
         unique_urls = list(dict.fromkeys(urls))
-        logger.info(f"Scraping {len(unique_urls)} unique URLs (from {len(urls)} input)")
+        logger.info(f"Scraping {len(unique_urls)} unique URLs (from {len(urls)} input) in mode: {selected_mode}")
 
         async def _wrap(url):
             try:
-                res = await self.task_engine.get_facebook_metadata(url, mode=self.mode)
+                res = await self.task_engine.get_facebook_metadata(url, mode=selected_mode)
             except Exception as e:
                 res = {"url": url, "error": str(e), "success": False}
             return url, res
@@ -130,17 +134,19 @@ class AsyncFacebookScraperStreaming:
             url, res = await coro
             yield {"url": url, "data": res}
 
-    async def get_multiple_metadata(self, urls: List[str], batch_size: Optional[int] = None) -> Dict[str, Any]:
+    async def get_multiple_metadata(self, urls: List[str], mode: str = None, batch_size: Optional[int] = None) -> Dict[str, Any]:
         """Get multiple metadata using the task engine"""
         if not self.task_engine:
             raise RuntimeError("Task engine not initialized")
             
+        # Use provided mode or default to instance mode
+        selected_mode = mode or self.mode
         if batch_size is None:
             batch_size = min(self.max_concurrent, max(1, len(urls)))
         results = {}
         for i in range(0, len(urls), batch_size):
             batch = urls[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1} ({len(batch)} URLs)")
-            async for item in self.task_engine.get_multiple_metadata_streaming(batch, mode=self.mode):
+            logger.info(f"Processing batch {i//batch_size + 1} ({len(batch)} URLs) in mode: {selected_mode}")
+            async for item in self.task_engine.get_multiple_metadata_streaming(batch, mode=selected_mode):
                 results[item['url']] = item['data']
         return results

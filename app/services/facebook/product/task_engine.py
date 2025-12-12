@@ -68,7 +68,7 @@ class SharedInMemoryCache:
     """
     Shared in-memory cache to reduce Redis calls
     """
-    def __init__(self, max_size: int = 500):
+    def __init__(self, max_size: int = 1000):  # Increase cache size
         self.cache = OrderedDict()
         self.max_size = max_size
         self.hits = 0
@@ -82,7 +82,7 @@ class SharedInMemoryCache:
         if cache_key in self.cache:
             # Check TTL expiry
             entry = self.cache[cache_key]
-            if time.time() - entry.get('timestamp', 0) > entry.get('ttl', 300):
+            if time.time() - entry.get('timestamp', 0) > entry.get('ttl', 600):  # Increase TTL to 10 minutes
                 # Entry expired, remove it
                 self.cache.pop(cache_key)
                 self.expiry_count += 1
@@ -102,7 +102,7 @@ class SharedInMemoryCache:
         increment_cache_miss('memory', 'not_found')
         return None
 
-    def set(self, url: str, data: Dict, ttl: int = 300):
+    def set(self, url: str, data: Dict, ttl: int = 600):  # Increase TTL to 10 minutes
         cache_key = f"fb_scrape:{hashlib.md5(url.encode()).hexdigest()}"
         entry = {
             'data': data,
@@ -257,128 +257,149 @@ class TaskEngine:
         if self.rate_limiter:
             await self.rate_limiter.acquire()
 
-        try:
-            start = time.time()
-            
-            # Get a page and context from pool via fetcher
-            page, context = await self.fetcher.browser_pool.get_page()
-            
+        # Implement retry mechanism with exponential backoff
+        max_retries = 3
+        retry_count = 0
+        last_exception = None
+
+        while retry_count <= max_retries:
             try:
-                # Fetch page content
-                fetch_result = await self.fetcher.fetch_page_content(page, url, mode)
+                start = time.time()
                 
-                # Update throttler with navigation time
-                throttler.update_navigation_time(fetch_result["navigation_time"], mode)
+                # Get a page and context from pool via fetcher
+                page, context = await self.fetcher.browser_pool.get_page()
                 
-                # Extract data
-                extracted_data = await self.extractor.extract_data(fetch_result["page"], mode)
-                
-                # Combine results
-                result = {**fetch_result, **extracted_data}
-                # Remove the page object as it shouldn't be returned to the user
-                if "page" in result:
-                    del result["page"]
-                result["success"] = True
-                result["from_cache"] = False
-                result["scrape_time"] = time.time() - start
-                
-                if result and result.get("success"):
-                    self.stats["successful_scrapes"] += 1
-                    increment_scrape_success(mode)
-                    observe_scrape_duration(result["scrape_time"], mode)
-                    # Cache the result
-                    self.shared_cache.set(url, result, self.cache_ttl)
-                    if self.redis_cache:
-                        try:
-                            await self.redis_cache.set(url, result, self.cache_ttl)
-                        except Exception:
-                            logger.debug("Redis set failed", exc_info=True)
-                else:
-                    self.stats["failed_scrapes"] += 1
-                    # Determine error type for metrics
-                    error_type = "unknown"
-                    if result.get("error"):
-                        error_msg = str(result["error"]).lower()
-                        if "rate" in error_msg or "limit" in error_msg:
-                            error_type = "rate_limited"
-                            from .metrics import increment_rate_limits
-                            throttler.record_rate_limit_event()  # Update throttler
-                            increment_rate_limits()
-                        elif "checkpoint" in error_msg or "restricted" in error_msg:
-                            error_type = "checkpoint"
-                            from .metrics import increment_checkpoints
-                            increment_checkpoints()
-                        else:
-                            error_type = "other_error"
-                    increment_scrape_failure(error_type, mode)
+                try:
+                    # Fetch page content
+                    fetch_result = await self.fetcher.fetch_page_content(page, url, mode)
+                    
+                    # Update throttler with navigation time
+                    throttler.update_navigation_time(fetch_result["navigation_time"], mode)
+                    
+                    # Extract data
+                    extracted_data = await self.extractor.extract_data(fetch_result["page"], mode)
+                    
+                    # Combine results
+                    result = {**fetch_result, **extracted_data}
+                    # Remove the page object as it shouldn't be returned to the user
+                    if "page" in result:
+                        del result["page"]
+                    result["success"] = True
+                    result["from_cache"] = False
+                    result["scrape_time"] = time.time() - start
+                    
+                    if result and result.get("success"):
+                        self.stats["successful_scrapes"] += 1
+                        increment_scrape_success(mode)
+                        observe_scrape_duration(result["scrape_time"], mode)
+                        # Cache the result
+                        self.shared_cache.set(url, result, self.cache_ttl)
+                        if self.redis_cache:
+                            try:
+                                await self.redis_cache.set(url, result, self.cache_ttl)
+                            except Exception:
+                                logger.debug("Redis set failed", exc_info=True)
+                    else:
+                        self.stats["failed_scrapes"] += 1
+                        # Determine error type for metrics
+                        error_type = "unknown"
+                        if result.get("error"):
+                            error_msg = str(result["error"]).lower()
+                            if "rate" in error_msg or "limit" in error_msg:
+                                error_type = "rate_limited"
+                                from .metrics import increment_rate_limits
+                                throttler.record_rate_limit_event()  # Update throttler
+                                increment_rate_limits()
+                            elif "checkpoint" in error_msg or "restricted" in error_msg:
+                                error_type = "checkpoint"
+                                from .metrics import increment_checkpoints
+                                increment_checkpoints()
+                            else:
+                                error_type = "other_error"
+                        increment_scrape_failure(error_type, mode)
 
-                self.stats["total_time"] += result.get("scrape_time", 0)
-                return result
-                
-            finally:
-                # Return page to pool with context
-                await self.fetcher.browser_pool.return_page(page, context)
+                    self.stats["total_time"] += result.get("scrape_time", 0)
+                    return result
+                    
+                finally:
+                    # Return page to pool with context
+                    await self.fetcher.browser_pool.return_page(page, context)
 
-        except Exception as e:
-            logger.error(f"get_facebook_metadata error for {url}: {e}")
-            self.stats["failed_scrapes"] += 1
-            # Determine error type for metrics
-            error_msg = str(e).lower()
-            if "rate" in error_msg or "limit" in error_msg:
-                error_type = "rate_limited"
-                from .metrics import increment_rate_limits
-                throttler.record_rate_limit_event()  # Update throttler
-                increment_rate_limits()
-            elif "checkpoint" in error_msg or "restricted" in error_msg:
-                error_type = "checkpoint"
-                from .metrics import increment_checkpoints
-                increment_checkpoints()
-            else:
-                error_type = "exception"
-            increment_scrape_failure(error_type, mode)
-            result = {"url": url, "error": str(e), "success": False, "scrape_time": 0}
-            return result
-        finally:
-            if self.rate_limiter:
-                self.rate_limiter.release()
-
-    async def get_multiple_metadata_streaming(self, urls: List[str], mode: str = "simple") -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream results as they complete (deduped) with mode-based queue management"""
-        unique_urls = list(dict.fromkeys(urls))
-        logger.info(f"Scraping {len(unique_urls)} unique URLs (from {len(urls)} input) in mode: {mode}")
-        
-        # Update queue size for this mode
-        self.queue_manager.queue_sizes[mode] = len(unique_urls)
-        scaler.update_queue_length(len(unique_urls), mode)
-        update_queue_size(len(unique_urls))
-
-        async def _wrap(url):
-            tracked_item = TrackedQueueItem(url, mode)
-            try:
-                # Record waiting time
-                waiting_time = tracked_item.get_waiting_time()
-                observe_queue_waiting_duration(waiting_time, mode)
-                # Add to scaler for auto-scaling decisions
-                scaler.add_queue_wait_time(waiting_time, mode)
-                
-                res = await self.get_facebook_metadata(url, mode=mode)
             except Exception as e:
-                res = {"url": url, "error": str(e), "success": False}
-            return url, res
+                last_exception = e
+                retry_count += 1
+                if retry_count <= max_retries:
+                    # Exponential backoff: wait 2^retry_count seconds
+                    wait_time = 2 ** retry_count
+                    logger.warning(f"Retry {retry_count}/{max_retries} for {url} after error: {e}. Waiting {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # All retries exhausted
+                    logger.error(f"All retries exhausted for {url}. Last error: {e}")
 
-        tasks = [asyncio.create_task(_wrap(u)) for u in unique_urls]
+        # If we get here, all retries failed
+        logger.error(f"get_facebook_metadata error for {url} after {max_retries} retries: {last_exception}")
+        self.stats["failed_scrapes"] += 1
+        # Determine error type for metrics
+        error_msg = str(last_exception).lower()
+        if "rate" in error_msg or "limit" in error_msg:
+            error_type = "rate_limited"
+            from .metrics import increment_rate_limits
+            throttler.record_rate_limit_event()  # Update throttler
+            increment_rate_limits()
+        elif "checkpoint" in error_msg or "restricted" in error_msg:
+            error_type = "checkpoint"
+            from .metrics import increment_checkpoints
+            increment_checkpoints()
+        else:
+            error_type = "exception"
+        increment_scrape_failure(error_type, mode)
+        result = {"url": url, "error": str(last_exception), "success": False, "scrape_time": 0}
+        if self.rate_limiter:
+            self.rate_limiter.release()
+        return result
 
-        # stream in completion order
-        for coro in asyncio.as_completed(tasks):
-            url, res = await coro
-            # Update queue size when task completes
-            current_size = len([t for t in tasks if not t.done()])
-            self.queue_manager.queue_sizes[mode] = current_size
-            scaler.update_queue_length(current_size, mode)
-            update_queue_size(current_size)
-            yield {"url": url, "data": res}
+    async def get_multiple_metadata_streaming(self, urls: List[str], mode: str = "simple", batch_size: int = 25) -> AsyncGenerator[Dict[str, Any], None]:
+        """Process URLs in smaller batches within the streaming function for better resource management"""
+        unique_urls = list(dict.fromkeys(urls))
+        logger.info(f"Processing {len(unique_urls)} URLs in batches of {batch_size} in mode: {mode}")
+        
+        # Process URLs in smaller batches to prevent overwhelming the system
+        for i in range(0, len(unique_urls), batch_size):
+            batch = unique_urls[i:i + batch_size]
+            
+            # Update queue size for this mode
+            self.queue_manager.queue_sizes[mode] = len(batch)
+            scaler.update_queue_length(len(batch), mode)
+            update_queue_size(len(batch))
 
-    async def get_multiple_metadata(self, urls: List[str], mode: str = "simple", batch_size: Optional[int] = None) -> Dict[str, Any]:
+            async def _process_batch_item(url):
+                tracked_item = TrackedQueueItem(url, mode)
+                try:
+                    # Record waiting time
+                    waiting_time = tracked_item.get_waiting_time()
+                    observe_queue_waiting_duration(waiting_time, mode)
+                    # Add to scaler for auto-scaling decisions
+                    scaler.add_queue_wait_time(waiting_time, mode)
+                    
+                    res = await self.get_facebook_metadata(url, mode=mode)
+                except Exception as e:
+                    res = {"url": url, "error": str(e), "success": False}
+                return url, res
+
+            tasks = [asyncio.create_task(_process_batch_item(u)) for u in batch]
+
+            # Process batch items as they complete
+            for coro in asyncio.as_completed(tasks):
+                url, res = await coro
+                # Update queue size when task completes
+                current_size = len([t for t in tasks if not t.done()])
+                self.queue_manager.queue_sizes[mode] = current_size
+                scaler.update_queue_length(current_size, mode)
+                update_queue_size(current_size)
+                yield {"url": url, "data": res}
+
+    async def get_multiple_metadata(self, urls: List[str], mode: str = "simple", batch_size: Optional[int] = 25) -> Dict[str, Any]:
         if batch_size is None:
             # Use rate limiter's max concurrent if available
             batch_size = min(self.rate_limiter.max_concurrent if self.rate_limiter else 6, max(1, len(urls)))
@@ -393,7 +414,7 @@ class TaskEngine:
             scaler.update_queue_length(len(batch), mode)
             update_queue_size(len(batch))
             
-            async for item in self.get_multiple_metadata_streaming(batch, mode):
+            async for item in self.get_multiple_metadata_streaming(batch, mode, batch_size):
                 results[item['url']] = item['data']
         return results
 

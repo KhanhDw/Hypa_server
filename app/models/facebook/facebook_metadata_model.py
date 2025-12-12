@@ -12,6 +12,7 @@ class ScrapeRequest(BaseModel):
     headless: Optional[bool] = True
     max_concurrent: Optional[int] = 5
     cache_ttl: Optional[int] = 600
+    mode: Optional[str] = "simple"  # simple|full|super
     
     @field_validator('urls')
     @classmethod
@@ -31,3 +32,4 @@ class ScraperConfig(BaseModel):
     max_concurrent: Optional[int] = 5
     cache_ttl: Optional[int] = 600
     enable_images: Optional[bool] = True
+    mode: Optional[str] = "simple"  # simple|full|super

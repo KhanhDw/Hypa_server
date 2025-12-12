@@ -36,7 +36,6 @@ async def scrape_streaming(request: ScrapeRequest):
     - Tốt cho real-time progress
     """
     try:
-        print("Received streaming request:-->>>>", request)
         result = await controller.method_streaming(request)
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
@@ -63,7 +62,8 @@ async def scrape_single(
     headless: bool = True,
     max_concurrent: int = 5,
     cache_ttl: int = 600,
-    enable_images: bool = True
+    enable_images: bool = True,
+    mode: str = "simple"  # simple|full|super
 ):
     """
     Scrape một URL duy nhất
@@ -73,7 +73,8 @@ async def scrape_single(
             headless=headless,
             max_concurrent=max_concurrent,
             cache_ttl=cache_ttl,
-            enable_images=enable_images
+            enable_images=enable_images,
+            mode=mode
         )
         result = await controller.method_single(url, config)
         return JSONResponse(content=result, status_code=200)
@@ -147,7 +148,7 @@ async def manual_scaling_operation(operation: str, value: int = None):
                 return {"status": "success", "message": f"Workers scaled up to {scaler.current_workers}"}
             else:
                 return {"status": "warning", "message": f"Already at max workers ({scaler.max_workers})"}
-                
+
         elif operation == "scale_down":
             # Decrease worker count manually
             if scaler.current_workers > scaler.min_workers:
@@ -163,7 +164,7 @@ async def manual_scaling_operation(operation: str, value: int = None):
                 return {"status": "success", "message": f"Workers scaled down to {scaler.current_workers}"}
             else:
                 return {"status": "warning", "message": f"Already at min workers ({scaler.min_workers})"}
-                
+
         elif operation == "set_workers":
             if value is not None:
                 if scaler.min_workers <= value <= scaler.max_workers:

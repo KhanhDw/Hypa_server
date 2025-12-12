@@ -17,14 +17,14 @@ class WorkerScaler:
     """
     
     def __init__(self, 
-                 min_workers: int = 1,
+                 min_workers: int = 4,               # Increased to support larger workloads
                  max_workers: int = 10,
                  scale_up_threshold: float = 1.0,    # P90 queue wait time in seconds to trigger scale up
                  scale_down_threshold: float = 0.2,  # P90 queue wait time in seconds to trigger scale down
-                 queue_length_scale_up: int = 10,    # Queue length to trigger scale up
-                 queue_length_scale_down: int = 3,   # Queue length to trigger scale down
+                 queue_length_scale_up: int = 5,     # Lower threshold to trigger scale up faster
+                 queue_length_scale_down: int = 2,   # Lower threshold to trigger scale down
                  scaling_window: int = 50,           # Number of recent queue wait times to consider
-                 cooldown_period: int = 30,          # Cooldown period in seconds between scaling actions
+                 cooldown_period: int = 20,          # Reduced cooldown for more responsive scaling
                  memory_threshold: float = 800.0):   # Memory threshold in MB to trigger worker restart
         
         self.min_workers = min_workers

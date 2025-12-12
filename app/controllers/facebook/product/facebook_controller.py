@@ -45,7 +45,8 @@ class FacebookScraperController:
             headless=config.headless,
             max_concurrent=config.max_concurrent,
             cache_ttl=config.cache_ttl,
-            enable_images=config.enable_images
+            enable_images=config.enable_images,
+            mode=config.mode  # Add mode parameter
         )
         # Khởi tạo context manager
         await self.scraper.__aenter__()
@@ -75,7 +76,8 @@ class FacebookScraperController:
                 headless=request.headless,
                 max_concurrent=request.max_concurrent,
                 cache_ttl=request.cache_ttl,
-                enable_images=request.enable_images
+                enable_images=request.enable_images,
+                mode=request.mode  # Use mode from request if available
             )
             scraper = await self.init_scraper(config)
 
@@ -84,13 +86,14 @@ class FacebookScraperController:
                 "method": "streaming",
                 "success": True,
                 "total_urls": len(request.urls),
+                "mode": config.mode,  # Include mode in response
                 "start_time": start_time,
                 "results": [],
                 "errors": []
             }
 
             # Xử lý streaming
-            async for result in scraper.get_multiple_metadata_streaming(request.urls):
+            async for result in scraper.get_multiple_metadata_streaming(request.urls, mode=config.mode):
                 url = result["url"]
                 data = result["data"]
 
@@ -144,13 +147,14 @@ class FacebookScraperController:
                 headless=request.headless,
                 max_concurrent=request.max_concurrent,
                 cache_ttl=request.cache_ttl,
-                enable_images=request.enable_images
+                enable_images=request.enable_images,
+                mode=request.mode  # Use mode from request if available
             )
             scraper = await self.init_scraper(config)
 
             # Thực hiện batch scraping
             batch_size = request.batch_size or config.max_concurrent
-            results = await scraper.get_multiple_metadata(request.urls, batch_size)
+            results = await scraper.get_multiple_metadata(request.urls, mode=config.mode, batch_size=batch_size)
 
             # Chuẩn bị response
             response = {
@@ -158,6 +162,7 @@ class FacebookScraperController:
                 "success": True,
                 "total_urls": len(request.urls),
                 "batch_size": batch_size,
+                "mode": config.mode,  # Include mode in response
                 "start_time": start_time,
                 "results": {},
                 "summary": {},
@@ -214,12 +219,14 @@ class FacebookScraperController:
 
         try:
             scraper = await self.init_scraper(config)
-            result = await scraper.get_facebook_metadata(url)
+            # Use the mode from config when calling get_facebook_metadata
+            result = await scraper.get_facebook_metadata(url, mode=config.mode)
 
             response = {
                 "method": "single",
                 "success": True,
                 "url": url,
+                "mode": config.mode,  # Include mode in response
                 "start_time": start_time,
                 "end_time": time.time(),
                 "total_time": time.time() - start_time,
@@ -234,6 +241,7 @@ class FacebookScraperController:
                 "method": "single",
                 "success": False,
                 "url": url,
+                "mode": config.mode,  # Include mode in response
                 "error": str(e),
                 "start_time": start_time,
                 "end_time": time.time(),

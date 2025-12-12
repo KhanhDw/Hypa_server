@@ -24,18 +24,18 @@ class PageFetcher:
         """Navigate to URL and return the page for extraction"""
         start = time.time()
         try:
-            # Try with DOM content loaded first
-            await page.goto(url, wait_until="domcontentloaded", timeout=12000, referer="https://www.facebook.com/")
+            # Try with commit first for faster loading
+            await page.goto(url, wait_until="commit", timeout=8000, referer="https://www.facebook.com/")
         except Exception as e:
-            # Fallback to shorter wait
+            # Fallback to network idle for complex pages
             logger.debug(f"First goto failed {url}: {e}")
             try:
-                await page.goto(url, wait_until="commit", timeout=7000)
+                await page.goto(url, wait_until="networkidle", timeout=15000)
             except Exception as e2:
                 raise e2
 
-        # Wait a bit for dynamic content
-        await page.wait_for_timeout(random.uniform(600, 1600))
+        # Wait a bit for dynamic content but with reduced time
+        await page.wait_for_timeout(random.uniform(300, 800))
         
         navigation_time = time.time() - start
         observe_navigation_duration(navigation_time, mode)

@@ -39,11 +39,20 @@ class FacebookScraperAPI:
                 )
                 
             while True:
-                job_id, urls = await self.job_queue.get()
+                job_id, job_data = await self.job_queue.get()
+                # Handle both old format (just URLs) and new format (dict with urls and mode)
+                if isinstance(job_data, dict) and 'urls' in job_data:
+                    urls = job_data['urls']
+                    mode = job_data.get('mode', 'simple')
+                else:
+                    urls = job_data
+                    mode = 'simple'  # default mode
+                
                 self.active_jobs[job_id]['status'] = 'running'
                 try:
                     results = {}
-                    async for item in scraper.get_multiple_metadata_streaming(urls):
+                    # Use the new batch_size parameter for more efficient processing and pass mode
+                    async for item in scraper.get_multiple_metadata_streaming(urls, mode=mode, batch_size=25):
                         results[item['url']] = item['data']
                     self.active_jobs[job_id]['status'] = 'completed'
                     self.active_jobs[job_id]['results'] = results
@@ -55,17 +64,23 @@ class FacebookScraperAPI:
                 finally:
                     self.job_queue.task_done()
 
-    async def create_job(self, urls: List[str]) -> str:
-        job_id = str(uuid.uuid4())
-        self.active_jobs[job_id] = {
-            "id": job_id,
-            "urls": urls,
-            "status": "queued",
-            "created_at": time.time(),
-            "total_urls": len(urls)
-        }
-        await self.job_queue.put((job_id, urls))
-        return job_id
+    async def create_job(self, urls: List[str], chunk_size: int = 25, mode: str = "simple") -> List[str]:
+        """Create multiple jobs with smaller chunk sizes for better processing of large batches"""
+        job_ids = []
+        for i in range(0, len(urls), chunk_size):
+            chunk = urls[i:i + chunk_size]
+            job_id = str(uuid.uuid4())
+            self.active_jobs[job_id] = {
+                "id": job_id,
+                "urls": chunk,
+                "status": "queued",
+                "created_at": time.time(),
+                "total_urls": len(chunk),
+                "mode": mode
+            }
+            await self.job_queue.put((job_id, {"urls": chunk, "mode": mode}))
+            job_ids.append(job_id)
+        return job_ids
 
     def get_job_status(self, job_id: str) -> Dict:
         return self.active_jobs.get(job_id, {"error": "Job not found"})

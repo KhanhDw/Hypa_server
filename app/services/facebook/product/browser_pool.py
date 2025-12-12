@@ -21,7 +21,7 @@ class BrowserPool:
       - Thêm metrics để theo dõi tài nguyên
     """
 
-    def __init__(self, max_contexts: int = 5, max_pages_per_context: int = 5, context_reuse_limit: int = 20, browser_args: List[str] = None,
+    def __init__(self, max_contexts: int = 8, max_pages_per_context: int = 8, context_reuse_limit: int = 250, browser_args: List[str] = None,
                  headless: bool = True, enable_images: bool = True):
         self.max_contexts = max_contexts
         self.max_pages_per_context = max_pages_per_context
@@ -32,6 +32,42 @@ class BrowserPool:
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--window-size=1280,720',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-ipc-flooding-protection',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-restore-session-state',
+            '--disable-new-avatar-menu',
+            '--no-first-run',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-plugins',
+            '--disable-translate',
+            '--disable-ipc-flooding-protection',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--disable-databases',
+            '--disable-webgl',
+            '--disable-javascript-harmony-shipping',
+            '--no-pings',
+            '--no-zygote',
+            '--disable-dev-shm-usage',
+            '--disable-features=TranslateUI',
+            '--disable-logging',
+            '--disable-permissions-api',
+            '--no-default-browser-check',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-ipc-flooding-protection',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-accessibility',
+            '--blink-settings=imagesEnabled=false',  # Disable images completely
+            '--disable-images',  # Another flag to disable images
+            '--disable-javascript',  # Disable JavaScript if not needed for metadata
+            '--disable-plugins-discovery',  # Disable plugin discovery
+            '--disable-audio-output',  # Disable audio output
         ]
         self.headless = headless
         self.enable_images = enable_images
