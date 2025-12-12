@@ -3,25 +3,29 @@ import time
 import logging
 import asyncio
 import random
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Set
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
 logger = logging.getLogger(__name__)
 
+from .metrics import update_active_contexts, update_active_pages, update_browser_memory
+
 
 class BrowserPool:
-    """Quản lý pool browser/context/page để tái sử dụng.
+    """Quản lý pool browser/context/page để tái sử dụng hiệu quả hơn.
 
-    Thiết kế:
-      - Tạo browser_args một lần, lưu trong self.browser_args (không dùng _impl internals)
-      - Khi tạo page, đăng ký route handler 1 lần
-      - Lưu map page -> context để khi trả page về pool có thể reset cookies/localStorage
+    Cải tiến:
+      - 1 browser -> nhiều context -> mỗi context nhiều page (tối ưu RAM)
+      - Không reset page sau mỗi lần sử dụng, chỉ reset context sau N lần sử dụng
+      - Giảm thời gian chờ bằng cách không xóa cookies/storage mỗi lần
+      - Thêm metrics để theo dõi tài nguyên
     """
 
-    def __init__(self, max_pages_per_browser: int = 6, browser_reuse_limit: int = 200, browser_args: List[str] = None,
+    def __init__(self, max_contexts: int = 5, max_pages_per_context: int = 5, context_reuse_limit: int = 20, browser_args: List[str] = None,
                  headless: bool = True, enable_images: bool = True):
-        self.max_pages_per_browser = max_pages_per_browser
-        self.browser_reuse_limit = browser_reuse_limit
+        self.max_contexts = max_contexts
+        self.max_pages_per_context = max_pages_per_context
+        self.context_reuse_limit = context_reuse_limit
         self.browser_args = browser_args or [
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
@@ -33,13 +37,16 @@ class BrowserPool:
         self.enable_images = enable_images
 
         self._playwright = None
-        # list of tuples: (browser, use_count)
-        self._browsers: List[Tuple[Browser, int]] = []
-        # pages queue (Page objects ready to use)
-        self._page_queue: asyncio.Queue = asyncio.Queue()
-        # map page -> context (for resets)
-        self._page_context_map: Dict[Page, BrowserContext] = {}
-        self._lock = asyncio.Lock()
+        self._browser = None  # Single browser for efficiency
+        # contexts queue (list of tuples: (context, use_count))
+        self._context_queue: asyncio.Queue = asyncio.Queue()
+        # pages queue for each context (map context -> list of pages)
+        self._context_pages_map: Dict[BrowserContext, List[Page]] = {}
+        self._context_lock = asyncio.Lock()
+
+        # Track active resources
+        self._active_contexts = 0
+        self._active_pages = 0
 
         # user agents
         self._user_agents = [
@@ -50,9 +57,14 @@ class BrowserPool:
 
     async def initialize(self):
         self._playwright = await async_playwright().start()
-        browser = await self._playwright.chromium.launch(headless=self.headless, args=self.browser_args)
-        self._browsers.append((browser, 0))
-        await self._create_pages(browser, self.max_pages_per_browser)
+        self._browser = await self._playwright.chromium.launch(headless=self.headless, args=self.browser_args)
+        # Create initial contexts and pages
+        for _ in range(self.max_contexts):
+            context = await self._create_context()
+            await self._create_pages(context, self.max_pages_per_context)
+            await self._context_queue.put((context, 0))
+            self._active_contexts += 1
+            update_active_contexts(self._active_contexts)
 
     def _get_random_user_agent(self) -> str:
         return random.choice(self._user_agents)
@@ -84,92 +96,114 @@ class BrowserPool:
             await route.continue_()
         return route_handler
 
-    async def _create_pages(self, browser: Browser, count: int):
+    async def _create_context(self) -> BrowserContext:
+        """Create a new context with random user agent"""
+        context = await self._browser.new_context(
+            java_script_enabled=True,
+            viewport={'width': 1280, 'height': 720},
+            user_agent=self._get_random_user_agent(),
+            extra_http_headers={
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            }
+        )
+        self._active_contexts += 1
+        update_active_contexts(self._active_contexts)
+        return context
+
+    async def _create_pages(self, context: BrowserContext, count: int):
+        """Create pages for a context and add to the map"""
+        if context not in self._context_pages_map:
+            self._context_pages_map[context] = []
+        
         for _ in range(count):
-            context = await browser.new_context(
-                java_script_enabled=True,
-                viewport={'width': 1280, 'height': 720},
-                user_agent=self._get_random_user_agent(),
-                extra_http_headers={
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                }
-            )
             page = await context.new_page()
             page.set_default_navigation_timeout(15000)
             page.set_default_timeout(10000)
             # Register route handler ONCE per page
             await page.route("**/*", self._route_handler_factory(self.enable_images))
-            # store mapping
-            self._page_context_map[page] = context
-            await self._page_queue.put(page)
+            self._context_pages_map[context].append(page)
+            self._active_pages += 1
+            update_active_pages(self._active_pages)
 
-    async def get_page(self) -> Page:
-        """Lấy page từ pool, tạo thêm browser + pages nếu cần."""
-        if self._page_queue.empty():
-            async with self._lock:
-                if self._page_queue.empty():
-                    # try to reuse primary browser
-                    browser, use_count = self._browsers[0]
-                    if use_count < self.browser_reuse_limit:
-                        await self._create_pages(browser, max(1, self.max_pages_per_browser // 2))
-                        self._browsers[0] = (browser, use_count + max(1, self.max_pages_per_browser // 2))
-                    else:
-                        # create a new browser using stored args
-                        new_browser = await self._playwright.chromium.launch(headless=self.headless, args=self.browser_args)
-                        self._browsers.append((new_browser, 0))
-                        await self._create_pages(new_browser, self.max_pages_per_browser)
+    async def get_page(self) -> Tuple[Page, BrowserContext]:
+        """Lấy page từ pool, tạo thêm context + pages nếu cần."""
+        if self._context_queue.empty():
+            async with self._context_lock:
+                if self._context_queue.empty():
+                    # Create a new context if we haven't reached the limit
+                    context = await self._create_context()
+                    await self._create_pages(context, self.max_pages_per_context)
+                    await self._context_queue.put((context, 0))
 
-        page: Page = await self._page_queue.get()
-        return page
+        # Get a context from the queue
+        context, use_count = await self._context_queue.get()
+        use_count += 1
 
-    async def return_page(self, page: Page):
-        """Reset page state (cookies/localStorage/sessionStorage) and trả về pool"""
+        # Check if we need to reset the context after N uses
+        if use_count >= self.context_reuse_limit:
+            # Close the current context and create a new one
+            await context.close()
+            self._active_contexts -= 1
+            update_active_contexts(self._active_contexts)
+            context = await self._create_context()
+            await self._create_pages(context, self.max_pages_per_context)
+            use_count = 1
+
+        # Return a page from the context's available pages
+        pages = self._context_pages_map.get(context, [])
+        if not pages:
+            await self._create_pages(context, 1)  # Create one more page if needed
+            pages = self._context_pages_map[context]
+            
+        page = pages.pop()  # Get a page from the context
+        self._active_pages -= 1  # Page is now in use, not in pool
+        update_active_pages(self._active_pages)
+        
+        # Put the context back in the queue with updated use count
+        await self._context_queue.put((context, use_count))
+        
+        return page, context
+
+    async def return_page(self, page: Page, context: BrowserContext):
+        """Return page to context pool for reuse (no reset for performance)"""
         try:
-            context = self._page_context_map.get(page)
-            if context:
-                try:
-                    await context.clear_cookies()
-                except Exception:
-                    pass
-                try:
-                    # clear storages in page
-                    await page.evaluate("() => { try{ localStorage.clear(); sessionStorage.clear(); } catch(e){} }")
-                except Exception:
-                    pass
-            # navigate to about:blank to reduce memory for that page
+            # Navigate to about:blank to reduce memory but don't reset cookies/storage
             try:
                 await page.goto("about:blank", wait_until="domcontentloaded", timeout=3000)
             except Exception:
-                pass
-            # put back
-            await self._page_queue.put(page)
-        except Exception:
-            # if anything fails, attempt to close page and remove it
+                pass  # If navigation to blank fails, page might be broken but we still add it back
+            
+            # Add the page back to the context's pages list
+            if context in self._context_pages_map:
+                self._context_pages_map[context].append(page)
+            else:
+                # Context might have been recreated, create the mapping
+                self._context_pages_map[context] = [page]
+            self._active_pages += 1  # Page is back in pool
+            update_active_pages(self._active_pages)
+        except Exception as e:
+            # If anything fails, attempt to close page to prevent leaks
             try:
                 await page.close()
             except Exception:
                 pass
 
     async def close(self):
-        # close pages
-        while not self._page_queue.empty():
+        # Close all contexts
+        while not self._context_queue.empty():
             try:
-                page = await self._page_queue.get()
-                try:
-                    ctx = self._page_context_map.pop(page, None)
-                    await page.close()
-                    if ctx:
-                        await ctx.close()
-                except Exception:
-                    pass
+                context, _ = await self._context_queue.get()
+                await context.close()
+                self._active_contexts -= 1
+                update_active_contexts(self._active_contexts)
             except Exception:
                 pass
 
-        # close browsers
-        for browser, _ in self._browsers:
+        # Close browser
+        if self._browser:
             try:
-                await browser.close()
+                await self._browser.close()
             except Exception:
                 pass
 
@@ -177,4 +211,4 @@ class BrowserPool:
             try:
                 await self._playwright.stop()
             except Exception:
-                pass
+                pass

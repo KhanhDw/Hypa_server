@@ -25,7 +25,7 @@ if __name__ == "__main__":
             "max_concurrent": 3,
             "cache_ttl": 600,
             "enable_images": True,
-            "mode": "super",  # simple|full|super
+            "mode": "simple",  # simple|full|super
             "redis_url": None,
             "use_browser_pool": True
         }

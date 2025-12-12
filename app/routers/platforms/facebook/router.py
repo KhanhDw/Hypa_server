@@ -1,9 +1,11 @@
 # routers/facebook_router.py
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+import time
 
 from ....models.facebook.facebook_metadata_model import ScrapeRequest, ScraperConfig
 from ....controllers.facebook.product.facebook_controller import FacebookScraperController
+from ....services.facebook.product.scaler import scaler
 
 # Tạo router với prefix
 router = APIRouter(prefix="/facebook", tags=["facebook"])
@@ -107,3 +109,96 @@ async def health_check():
         "status": "healthy",
         "scraper_initialized": controller.scraper is not None
     }
+
+
+# Scaling-related endpoints
+@router.get("/scaling/status")
+async def get_scaling_status():
+    """Get current scaling status including worker count, queue lengths, and memory usage"""
+    try:
+        scaling_status = scaler.get_current_status()
+        return JSONResponse(content={
+            "status": "success",
+            "data": scaling_status
+        }, status_code=200)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting scaling status: {str(e)}")
+
+
+@router.post("/scaling/manual")
+async def manual_scaling_operation(operation: str, value: int = None):
+    """
+    Manual scaling operations
+    Operations: 'scale_up', 'scale_down', 'set_workers'
+    """
+    try:
+        if operation == "scale_up":
+            # Increase worker count manually
+            if scaler.current_workers < scaler.max_workers:
+                scaler.current_workers += 1
+                scaler.last_scaling_action = time.time()
+                scaler.scaling_history.append({
+                    'timestamp': time.time(),
+                    'action': 'manual_scale_up',
+                    'from_workers': scaler.current_workers - 1,
+                    'to_workers': scaler.current_workers,
+                    'reason': 'manual_operation'
+                })
+                return {"status": "success", "message": f"Workers scaled up to {scaler.current_workers}"}
+            else:
+                return {"status": "warning", "message": f"Already at max workers ({scaler.max_workers})"}
+                
+        elif operation == "scale_down":
+            # Decrease worker count manually
+            if scaler.current_workers > scaler.min_workers:
+                scaler.current_workers -= 1
+                scaler.last_scaling_action = time.time()
+                scaler.scaling_history.append({
+                    'timestamp': time.time(),
+                    'action': 'manual_scale_down',
+                    'from_workers': scaler.current_workers + 1,
+                    'to_workers': scaler.current_workers,
+                    'reason': 'manual_operation'
+                })
+                return {"status": "success", "message": f"Workers scaled down to {scaler.current_workers}"}
+            else:
+                return {"status": "warning", "message": f"Already at min workers ({scaler.min_workers})"}
+                
+        elif operation == "set_workers":
+            if value is not None:
+                if scaler.min_workers <= value <= scaler.max_workers:
+                    old_workers = scaler.current_workers
+                    scaler.current_workers = value
+                    scaler.last_scaling_action = time.time()
+                    scaler.scaling_history.append({
+                        'timestamp': time.time(),
+                        'action': 'manual_set_workers',
+                        'from_workers': old_workers,
+                        'to_workers': scaler.current_workers,
+                        'reason': 'manual_operation'
+                    })
+                    return {"status": "success", "message": f"Workers set to {scaler.current_workers}"}
+                else:
+                    return {"status": "error", "message": f"Value must be between {scaler.min_workers} and {scaler.max_workers}"}
+            else:
+                return {"status": "error", "message": "Value parameter required for set_workers operation"}
+        else:
+            return {"status": "error", "message": "Invalid operation. Use 'scale_up', 'scale_down', or 'set_workers'"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during scaling operation: {str(e)}")
+
+
+@router.post("/scaling/restart-workers")
+async def restart_workers_if_needed():
+    """Manually trigger worker restart if memory usage is high"""
+    try:
+        workers_to_restart = scaler.get_workers_to_restart()
+        restart_performed = scaler.restart_workers_if_needed()
+        return JSONResponse(content={
+            "status": "success",
+            "restart_performed": restart_performed,
+            "workers_to_restart": workers_to_restart,
+            "message": f"Checked for worker restart. Restart performed: {restart_performed}"
+        }, status_code=200)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error restarting workers: {str(e)}")

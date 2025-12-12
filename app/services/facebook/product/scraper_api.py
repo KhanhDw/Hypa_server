@@ -5,6 +5,7 @@ import asyncio
 import uuid
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from .scraper_core import AsyncFacebookScraperStreaming
+from .rate_limiter import PerWorkerRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,15 @@ class FacebookScraperAPI:
     async def _worker(self, worker_id: str):
         logger.info(f"{worker_id} starting")
         # Each worker keeps its own scraper context to isolate BrowserPool lifecycle
+        # Also use per-worker rate limiter for better concurrency
         async with AsyncFacebookScraperStreaming(**self.scraper_config) as scraper:
+            # Override the rate limiter to be per-worker for better concurrency
+            if scraper.task_engine and scraper.task_engine.rate_limiter:
+                scraper.task_engine.rate_limiter = PerWorkerRateLimiter(
+                    max_requests_per_minute=self.scraper_config.get('max_requests_per_minute', 30),
+                    max_concurrent=self.scraper_config.get('max_concurrent', 6)
+                )
+                
             while True:
                 job_id, urls = await self.job_queue.get()
                 self.active_jobs[job_id]['status'] = 'running'

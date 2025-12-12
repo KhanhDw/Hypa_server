@@ -8,6 +8,9 @@ from app.config.cors import cors_origins
 from fastapi.middleware.cors import CORSMiddleware
 from app.config.event_loop import setup_event_loop
 
+# Import prometheus for metrics endpoint
+from prometheus_client import make_asgi_app
+
 setup_event_loop()
 
 # Set up logging first
@@ -50,6 +53,10 @@ app.add_middleware(
 
 # Include the centralized router
 app.include_router(router, prefix="/api")
+
+# Add metrics endpoint
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 if __name__ == "__main__":
     uvicorn.run(
