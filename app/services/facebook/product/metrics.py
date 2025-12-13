@@ -62,6 +62,25 @@ FACEBOOK_RESPONSE_STATUS = Counter(
     ['status_type', 'mode']  # e.g., 'success', 'not_accessible', 'deleted', 'private', 'rate_limited', 'blocked', 'redirect_loop'
 )
 
+# Single-flight metrics
+SINGLE_FLIGHT_REQUESTS_TOTAL = Counter(
+    'single_flight_requests_total',
+    'Total number of single-flight requests',
+    ['type']  # 'direct', 'coalesced'
+)
+
+SINGLE_FLIGHT_TIMEOUTS_TOTAL = Counter(
+    'single_flight_timeouts_total',
+    'Total number of single-flight timeouts',
+    ['scope']  # 'in_process', 'cross_process'
+)
+
+SINGLE_FLIGHT_COORDINATION_FAILURES = Counter(
+    'single_flight_coordination_failures_total',
+    'Total number of single-flight coordination failures',
+    ['error_type']
+)
+
 # Gauge metrics
 FACEBOOK_QUEUE_SIZE = Gauge(
     'facebook_queue_size', 
@@ -125,6 +144,20 @@ FACEBOOK_WORKER_IDLE_DURATION = Histogram(
     buckets=[0.01, 0.1, 0.5, 1.0, 2.0, 5.0, float('inf')]
 )
 
+# Single-flight histogram metrics
+SINGLE_FLIGHT_COORDINATION_DURATION = Histogram(
+    'single_flight_coordination_duration_seconds',
+    'Duration of single-flight coordination operations',
+    ['scope'],  # 'in_process', 'cross_process'
+    buckets=[0.001, 0.01, 0.1, 0.5, 1.0, 5.0, float('inf')]
+)
+
+SINGLE_FLIGHT_LATENCY_SAVINGS = Histogram(
+    'single_flight_latency_savings_seconds',
+    'Time saved by single-flight coalescing',
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, float('inf')]
+)
+
 
 # Helper functions for metric collection
 def increment_scrape_attempts(mode: str):
@@ -186,3 +219,19 @@ def observe_queue_waiting_duration(duration: float, mode: str):
 
 def observe_worker_idle_duration(duration: float):
     FACEBOOK_WORKER_IDLE_DURATION.observe(duration)
+
+# Single-flight helper functions
+def increment_single_flight_requests(request_type: str):
+    SINGLE_FLIGHT_REQUESTS_TOTAL.labels(type=request_type).inc()
+
+def increment_single_flight_timeouts(scope: str):
+    SINGLE_FLIGHT_TIMEOUTS_TOTAL.labels(scope=scope).inc()
+
+def increment_single_flight_coordination_failures(error_type: str):
+    SINGLE_FLIGHT_COORDINATION_FAILURES.labels(error_type=error_type).inc()
+
+def observe_single_flight_coordination_duration(duration: float, scope: str):
+    SINGLE_FLIGHT_COORDINATION_DURATION.labels(scope=scope).observe(duration)
+
+def observe_single_flight_latency_savings(duration: float):
+    SINGLE_FLIGHT_LATENCY_SAVINGS.observe(duration)

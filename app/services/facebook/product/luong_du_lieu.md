@@ -6,6 +6,7 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
 
 - Quản lý pool trình duyệt để tái sử dụng
 - Caching dữ liệu đã scrape (cả in-memory và Redis)
+- Single-flight implementation (in-process và cross-process)
 - Giới hạn tần suất yêu cầu
 - Hỗ trợ nhiều chế độ scrape (simple, full, super)
 - Tự động điều chỉnh tốc độ scraping dựa trên hiệu suất
@@ -18,62 +19,84 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
 
 ### 1. AsyncFacebookScraperStreaming (scraper_core.py)
 
-- **Vai trò chính**: Class trung tâm điều phối toàn bộ quá trình scraping
+- **Vai trò chính**: Application-level orchestrator & streaming adapter
 - **Tương tác với**:
-  - BrowserPool: để lấy và trả lại trang web
-  - RedisCache: để kiểm tra và lưu dữ liệu cache
-  - RateLimiter: để giới hạn tần suất yêu cầu
-  - BrowserPool: để lấy route handler
   - TaskEngine: để thực hiện các tác vụ scraping
+  - BrowserPool: để lấy và trả lại trang web (thông qua TaskEngine)
+  - RedisCache: để kiểm tra và lưu dữ liệu cache (thông qua TaskEngine)
+  - RateLimiter: để giới hạn tần suất yêu cầu (thông qua TaskEngine)
 - **Cấu hình mới**: context_reuse_limit tăng lên 250, cache_ttl 600s, enable_images=False
 
 ### 2. BrowserPool (browser_pool.py)
 
 - **Vai trò chính**: Quản lý pool trình duyệt, context và page để tái sử dụng
 - **Tương tác với**:
-  - AsyncFacebookScraperStreaming: cung cấp page cho việc scraping
+  - Fetcher (thông qua TaskEngine): cung cấp page cho việc scraping
   - Page/Context của Playwright: tạo, quản lý và reset state của các trang
-  - TaskEngine: cung cấp page và context cho các tác vụ scraping
 - **Cấu hình mới**: context_reuse_limit tăng lên 250 cho việc luân phiên trình duyệt hiệu quả hơn
 
 ### 3. RedisCache (redis_cache.py)
 
 - **Vai trò chính**: Cache dữ liệu scraping sử dụng Redis
 - **Tương tác với**:
-  - AsyncFacebookScraperStreaming: cung cấp phương thức get/set cache
+  - FacebookCacheManager: cung cấp phương thức get/set cache
   - TaskEngine: được sử dụng trong quá trình kiểm tra và lưu cache
 
 ### 4. RateLimiter (rate_limiter.py)
 
-- **Vai trò chính**: Giới hạn tần suất yêu cầu để tránh bị chặn
+- **Vai trò chính**: Hard limit - giới hạn tần suất yêu cầu để chặn hoàn toàn nếu vượt ngưỡng
 - **Tương tác với**:
-  - AsyncFacebookScraperStreaming: được gọi trước mỗi yêu cầu scraping
-  - TaskEngine: được áp dụng trong quá trình thực hiện scraping
+  - TaskEngine: được gọi trước mỗi yêu cầu scraping
+  - BrowserPool: bảo vệ tài nguyên vật lý
+- **Lưu ý**: RateLimiter là hard limit (semaphore/token bucket) bảo vệ tài nguyên vật lý
 
 ### 5. FacebookScraperAPI (scraper_api.py)
 
 - **Vai trò chính**: API wrapper để tích hợp với FastAPI
 - **Tương tác với**:
-  - AsyncFacebookScraperStreaming: tạo instance để thực hiện scraping
+  - TaskEngine: tạo instance để thực hiện scraping
   - Job queue: quản lý các tác vụ scraping
-  - TaskEngine: sử dụng để thực hiện các tác vụ scraping
 - **Cấu hình mới**: Hỗ trợ tạo nhiều job nhỏ từ batch lớn (create_job hỗ trợ chunk_size), worker xử lý batch_size=25
 
 ### 6. TaskEngine (task_engine.py)
 
-- **Vai trò chính**: Xử lý logic chính của scraping bao gồm caching, rate limiting và điều phối tác vụ
+- **Vai trò chính**: Xử lý logic chính của scraping bao gồm caching, rate limiting, single-flight coordination và điều phối tác vụ
 - **Tương tác với**:
+  - FacebookCacheManager: để kiểm tra và lưu dữ liệu cache (bao gồm cả negative cache)
+  - PureSingleFlight: để điều phối single-flight trong tiến trình
+  - RedisCoordination: để điều phối single-flight giữa các tiến trình
   - Fetcher: để điều phối việc lấy nội dung trang
   - Extractor: để trích xuất dữ liệu từ trang
-  - RedisCache: để kiểm tra và lưu dữ liệu cache
-  - RateLimiter: để giới hạn tần suất yêu cầu
   - BrowserPool (thông qua Fetcher): để lấy và trả lại trang web
   - AnomalyDetector: để theo dõi các bất thường trong quá trình scraping
   - Throttler: để điều chỉnh tốc độ scraping dựa trên hiệu suất
   - Scaler: để cập nhật thông tin về độ dài hàng đợi
 - **Cấu hình mới**: get_multiple_metadata_streaming hỗ trợ batch_size (mặc định 25) để xử lý hiệu quả batch lớn
+- **Xử lý Redis không khả dụng**: Khi Redis không có sẵn, hệ thống sẽ tự động quay trở lại chỉ sử dụng xử lý trong tiến trình (in-process only) và hiển thị thông báo thông tin (info) cho nhà phát triển thay vì báo lỗi
 
-### 7. Fetcher (fetcher.py)
+### 7. PureSingleFlight (task_engine.py)
+
+- **Vai trò chính**: Single-flight implementation trong tiến trình (in-process)
+- **Tương tác với**:
+  - TaskEngine: được sử dụng để đảm bảo chỉ có một tác vụ thực hiện cho mỗi URL trong cùng tiến trình
+- **Cấu trúc**: Sử dụng locks và futures để đảm bảo chỉ có một instance của một tác vụ chạy cho mỗi key
+
+### 8. RedisCoordination (task_engine.py)
+
+- **Vai trò chính**: Single-flight implementation giữa các tiến trình (cross-process) sử dụng Redis Pub/Sub
+- **Tương tác với**:
+  - TaskEngine: được sử dụng để đảm bảo chỉ có một tác vụ thực hiện cho mỗi URL giữa các tiến trình
+- **Cấu trúc**: Sử dụng Redis lock và Pub/Sub để đồng bộ hóa giữa các tiến trình
+
+### 9. FacebookCacheManager (task_engine.py)
+
+- **Vai trò chính**: Quản lý cấu trúc cache bao gồm cả cache cục bộ và Redis
+- **Tương tác với**:
+  - TaskEngine: được sử dụng để kiểm tra và lưu dữ liệu cache (bao gồm cả negative cache)
+  - RedisCache: để tương tác với cache Redis
+  - SharedInMemoryCache: để tương tác với cache cục bộ
+
+### 10. Fetcher (fetcher.py)
 
 - **Vai trò chính**: Xử lý việc điều hướng đến URL và lấy nội dung trang
 - **Tương tác với**:
@@ -81,7 +104,7 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
   - Page của Playwright: thực hiện điều hướng đến URL
   - TaskEngine: trả về kết quả điều hướng cho TaskEngine
 
-### 8. Extractor (extractor.py)
+### 11. Extractor (extractor.py)
 
 - **Vai trò chính**: Trích xuất dữ liệu từ trang web theo chế độ (simple, full, super)
 - **Tương tác với**:
@@ -89,13 +112,13 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
   - TaskEngine: trả về dữ liệu đã trích xuất cho TaskEngine
   - Metrics: ghi lại thời gian trích xuất dữ liệu
 
-### 9. Metrics (metrics.py)
+### 12. Metrics (metrics.py)
 
 - **Vai trò chính**: Theo dõi và ghi chép các chỉ số hiệu suất của hệ thống scraping
 - **Tương tác với**:
   - Tất cả các class khác: ghi lại các chỉ số như số lần scrape, thời gian điều hướng, thời gian trích xuất, v.v.
 
-### 10. AnomalyDetector (anomaly_detector.py)
+### 13. AnomalyDetector (anomaly_detector.py)
 
 - **Vai trò chính**: Phát hiện các bất thường trong quá trình scraping như độ trễ tăng đột biến, rate limit tăng, hoặc sử dụng bộ nhớ cao
 - **Tương tác với**:
@@ -103,16 +126,17 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
   - Throttler: cung cấp thông tin về các bất thường để điều chỉnh tốc độ scraping
   - Scaler: cung cấp thông tin về các bất thường để ra quyết định mở rộng hoặc thu hẹp hệ thống
 
-### 11. Throttler (throttler.py)
+### 14. Throttler (throttler.py)
 
-- **Vai trò chính**: Tự động điều chỉnh tốc độ scraping dựa trên các yếu tố như độ trễ điều hướng, tỷ lệ cache miss, sự kiện rate limit và mức sử dụng bộ nhớ
+- **Vai trò chính**: Soft control - tự động điều chỉnh tốc độ scraping dựa trên các yếu tố như độ trễ điều hướng, tỷ lệ cache miss, sự kiện rate limit và mức sử dụng bộ nhớ
 - **Tương tác với**:
   - TaskEngine: nhận thông tin về hiệu suất và điều chỉnh tốc độ scraping
   - AnomalyDetector: nhận thông tin về các bất thường để điều chỉnh tốc độ
   - Metrics: ghi lại các chỉ số liên quan đến hiệu suất
+- **Lưu ý**: Throttler là soft control (feedback loop) bảo vệ "danh tính scraper" (anti soft-ban)
 - **Cấu hình mới**: base_delay giảm còn 0.05s, max_delay giảm còn 3.0s, window sizes nhỏ hơn để phản ứng nhanh hơn
 
-### 12. Scaler (scaler.py)
+### 15. Scaler (scaler.py)
 
 - **Vai trò chính**: Tự động mở rộng số lượng worker dựa trên độ dài hàng đợi và thời gian chờ trong hàng đợi
 - **Tương tác với**:
@@ -120,7 +144,7 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
   - AnomalyDetector: sử dụng thông tin về bất thường để ra quyết định về việc khởi động lại worker
 - **Cấu hình mới**: min_workers tăng lên 4, queue_length_scale_up giảm xuống 5, cooldown_period giảm xuống 20s
 
-### 13. LargeBatchProcessor (large_batch_processor.py)
+### 16. LargeBatchProcessor (large_batch_processor.py)
 
 - **Vai trò chính**: Xử lý hiệu quả các batch lớn (500-2000 URLs) bằng cách chia nhỏ, quản lý worker và theo dõi tiến độ
 - **Tương tác với**:
@@ -130,22 +154,31 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
 
 ## Luồng dữ liệu chính
 
-### Quá trình scraping đơn lẻ
+### Quá trình scraping đơn lẻ - chi tiết single-flight
 
 1. `TaskEngine.get_facebook_metadata(url)`
-   - Kiểm tra cache cục bộ (SharedInMemoryCache) → nếu có dữ liệu, trả về ngay
+   - Kiểm tra cache cục bộ (FacebookCacheManager) → nếu có dữ liệu, trả về ngay
    - Kiểm tra cache Redis → nếu có dữ liệu, trả về và lưu vào cache cục bộ
-   - Gọi `Throttler.get_current_delay()` để áp dụng độ trễ nếu cần
-   - Gọi `RateLimiter.acquire()` để giới hạn tần suất
-   - Gọi `BrowserPool.get_page()` để lấy trang và context
-   - Gọi `Fetcher.fetch_page_content()` để điều hướng đến URL
-   - Ghi lại thời gian điều hướng cho `Throttler` và `AnomalyDetector`
-   - Gọi `Extractor.extract_data()` để trích xuất dữ liệu theo chế độ (simple, full, super)
-   - Ghi lại thời gian trích xuất cho Metrics
-   - Lưu kết quả vào cache cục bộ và Redis
-   - Gọi `BrowserPool.return_page()` để trả trang và context về pool
-   - Gọi `RateLimiter.release()` để kết thúc giới hạn tần suất
-   - Cập nhật các chỉ số hiệu suất trong Metrics
+   - Gọi `PureSingleFlight.do(key=url)` để đảm bảo single-flight trong tiến trình
+     - Follower (trong tiến trình) → chờ kết quả từ leader
+     - Leader (trong tiến trình) → tiếp tục xử lý
+       - Gọi `RedisCoordination.execute_with_coordination(url)` để đảm bảo single-flight giữa các tiến trình
+         - Follower (giữa các tiến trình) → chờ kết quả từ leader qua Redis Pub/Sub
+         - Leader (giữa các tiến trình) → tiếp tục xử lý
+           - Gọi `Throttler.get_current_delay()` để áp dụng độ trễ nếu cần
+           - Gọi `RateLimiter.acquire()` để giới hạn tần suất
+           - Gọi `BrowserPool.get_page()` để lấy trang và context
+           - Gọi `Fetcher.fetch_page_content()` để điều hướng đến URL
+           - Ghi lại thời gian điều hướng cho `Throttler` và `AnomalyDetector`
+           - Gọi `Extractor.extract_data()` để trích xuất dữ liệu theo chế độ (simple, full, super)
+           - Ghi lại thời gian trích xuất cho Metrics
+           - Lưu kết quả vào cache cục bộ và Redis
+           - Gọi `BrowserPool.return_page()` để trả trang và context về pool
+           - Gọi `RateLimiter.release()` để kết thúc giới hạn tần suất
+           - Gọi `RedisCoordination.publish_result()` để gửi kết quả cho các follower
+           - Cập nhật các chỉ số hiệu suất trong Metrics
+   - Follower (trong tiến trình) → nhận kết quả từ leader và trả về
+   - Follower (giữa các tiến trình) → nhận kết quả từ leader và trả về
 
 ### Quá trình scraping nhiều URL (batch lớn)
 
@@ -159,7 +192,7 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
    - Xử lý URLs theo batch nhỏ (25 URLs mỗi batch) để quản lý tài nguyên hiệu quả
    - Sử dụng `ModeBasedQueueManager` để quản lý hàng đợi theo chế độ
    - Ghi lại thời gian chờ trong hàng đợi cho Metrics
-   - Gọi `get_facebook_metadata()` cho từng URL
+   - Gọi `get_facebook_metadata()` cho từng URL (với single-flight)
    - Trả về kết quả theo thứ tự hoàn thành (async generator)
    - Cập nhật độ dài hàng đợi cho Scaler trong quá trình xử lý
 
@@ -241,7 +274,7 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
 1. `FacebookScraperAPI.start_worker()`
 
    - Tạo các worker task (mặc định 8 worker)
-   - Mỗi worker quản lý một instance `AsyncFacebookScraperStreaming`
+   - Mỗi worker quản lý một instance `TaskEngine`
 
 2. `FacebookScraperAPI.create_job(urls, chunk_size=25)`
    - Chia URLs thành các chunk nhỏ (25 URLs mỗi chunk)
@@ -249,12 +282,39 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
    - Đưa các job vào queue để được xử lý bởi các worker
    - Worker sẽ gọi `TaskEngine.get_multiple_metadata_streaming()` với batch_size=25
 
+## Sequence Diagram: Single-URL, Multi-User
+
+```
+1000 Users (same URL)
+       ↓
+TaskEngine.get_facebook_metadata(url)
+       ↓
+FacebookCacheManager.get(url)
+       ├─ HIT → return (for all)
+       ↓ MISS
+PureSingleFlight.do(key=url)
+       ├─ Follower (in-process) → wait future
+       └─ Leader (in-process)
+            ↓
+RedisCoordination.try_acquire(url)
+            ├─ Follower (cross-process) → wait pubsub
+            └─ Leader (cross-process)
+                 ↓
+REAL SCRAPE (Fetcher + BrowserPool + Extractor)
+                 ↓
+Cache result (local + redis)
+                 ↓
+Publish result to followers
+                 ↓
+Return result to all waiters
+```
+
 ## Tính năng chính của luồng dữ liệu
 
 1. **Tái sử dụng tài nguyên**: BrowserPool giúp tái sử dụng trình duyệt và trang, giảm overhead
 2. **Caching đa lớp**: Cả cache cục bộ và Redis giúp tăng tốc độ xử lý
-3. **Giới hạn tần suất**: RateLimiter ngăn chặn việc bị chặn do gửi quá nhiều request
-4. **Xử lý lỗi**: Các lớp xử lý lỗi riêng biệt và có cơ chế fallback
+3. **Single-flight coordination**: PureSingleFlight + RedisCoordination đảm bảo chỉ có một tác vụ thực sự scrape cho mỗi URL (giữa các tiến trình và trong tiến trình)
+4. **Giới hạn tần suất**: RateLimiter (hard limits) và Throttler (soft control) hoạt động song song để bảo vệ hệ thống
 5. **Hỗ trợ nhiều chế độ**: 3 chế độ trích xuất dữ liệu (simple, full, super)
 6. **Queue-based processing**: FacebookScraperAPI hỗ trợ xử lý tác vụ nền
 7. **Tự điều chỉnh hiệu suất**: Throttler tự động điều chỉnh tốc độ scraping dựa trên hiệu suất thực tế
@@ -269,3 +329,20 @@ Các class trong thư mục `app\services\facebook\product` hoạt động cùng
     - Chia nhỏ batch: 20-50 URLs mỗi chunk để tránh quá tải
     - Luân phiên trình duyệt: Context reset mỗi 250 navigation để tránh memory leak
     - Throttling thích ứng: Điều chỉnh độ trễ khi navigation tăng
+
+## Mental Model (5 Key Concepts)
+
+1. **Cache quyết định 80% performance**
+   - local → redis → negative cache
+
+2. **Single-flight quyết định khả năng chịu tải**
+   - 1000 request ≈ 1 scrape
+
+3. **BrowserPool là tài nguyên quý hiếm**
+   - chỉ leader được chạm
+
+4. **Throttler + AnomalyDetector = hệ thần kinh**
+   - cảm nhận Facebook đang "khó chịu"
+
+5. **Scaler là cơ bắp**
+   - co giãn theo stress, không theo số request
