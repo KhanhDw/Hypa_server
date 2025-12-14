@@ -4,6 +4,7 @@ import re
 from app.utils.youtube_parser import extract_youtube_id
 from app.models.youtube.youtube_metadata_model import YouTubeMetadata
 from app.config.logging_config import get_logger
+from app.exceptions.video import InvalidVideoURLException, VideoFetchFailedException
 
 logger = get_logger(__name__)
 
@@ -15,9 +16,7 @@ class YouTubeServiceOg:
         logger.info(f"Fetching OG metadata for URL: {url}")
         video_id = extract_youtube_id(url)
         if not video_id:
-            error_msg = "URL không phải là YouTube hợp lệ"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise InvalidVideoURLException(url)
 
         headers = {
             "User-Agent": (
@@ -35,7 +34,7 @@ class YouTubeServiceOg:
                 logger.info(f"Successfully fetched HTML for video ID: {video_id}")
         except Exception as e:
             logger.error(f"Error fetching HTML for {url}: {str(e)}")
-            raise
+            raise VideoFetchFailedException(url, str(e))
 
         # ---- Parse metadata ----
         try:

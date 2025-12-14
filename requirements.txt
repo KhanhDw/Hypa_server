@@ -16,3 +16,4 @@ playwright-stealth==2.0.0
 python-multipart>=0.0.6
 redis==7.1.0
 prometheus-client==0.19.0
+pyktok==0.0.31

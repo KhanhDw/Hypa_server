@@ -11,6 +11,16 @@ from app.config.event_loop import setup_event_loop
 # Import prometheus for metrics endpoint
 from prometheus_client import make_asgi_app
 
+# Import exception handlers
+from app.exceptions.handlers import (
+    app_exception_handler,
+    validation_exception_handler,
+    unhandled_exception_handler,
+    SQLALCHEMY_AVAILABLE
+)
+from app.exceptions.base import AppException
+from pydantic import ValidationError
+
 setup_event_loop()
 
 # Set up logging first
@@ -31,7 +41,6 @@ os.environ["PATH"] = (
 
 
 
-
 # Initialize FastAPI application
 app = FastAPI(
     title="Kino Server",
@@ -41,6 +50,17 @@ app = FastAPI(
     redoc_url="/redoc",      # Default, but you can change it
     openapi_url="/openapi.json"  # Default OpenAPI schema
 )
+
+# Register global exception handlers
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(ValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
+
+# Only register SQLAlchemy handler if SQLAlchemy is available
+if SQLALCHEMY_AVAILABLE:
+    from app.exceptions.handlers import sqlalchemy_exception_handler
+    from sqlalchemy.exc import SQLAlchemyError
+    app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
 
 # CORS configuration
 app.add_middleware(

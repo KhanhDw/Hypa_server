@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ....models.facebook.facebook_metadata_model import ScrapeRequest, ScraperConfig
 from ....services.facebook.product.scraper_core import AsyncFacebookScraperStreaming
+from ....exceptions.social_integration import SocialScrapingFailedException, InvalidSocialURLException
 
 logger = logging.getLogger(__name__)
 
@@ -70,29 +71,34 @@ class FacebookScraperController:
         """
         start_time = time.time()
 
+        # Validate URLs first
+        for url in request.urls:
+            if not url.startswith(('http://', 'https://')):
+                raise InvalidSocialURLException(url, "facebook")
+        
+        # Khởi tạo scraper
+        config = ScraperConfig(
+            headless=request.headless,
+            max_concurrent=request.max_concurrent,
+            cache_ttl=request.cache_ttl,
+            enable_images=request.enable_images,
+            mode=request.mode  # Use mode from request if available
+        )
+        scraper = await self.init_scraper(config)
+
+        # Chuẩn bị response
+        response = {
+            "method": "streaming",
+            "success": True,
+            "total_urls": len(request.urls),
+            "mode": config.mode,  # Include mode in response
+            "start_time": start_time,
+            "results": [],
+            "errors": []
+        }
+
+        # Xử lý streaming
         try:
-            # Khởi tạo scraper
-            config = ScraperConfig(
-                headless=request.headless,
-                max_concurrent=request.max_concurrent,
-                cache_ttl=request.cache_ttl,
-                enable_images=request.enable_images,
-                mode=request.mode  # Use mode from request if available
-            )
-            scraper = await self.init_scraper(config)
-
-            # Chuẩn bị response
-            response = {
-                "method": "streaming",
-                "success": True,
-                "total_urls": len(request.urls),
-                "mode": config.mode,  # Include mode in response
-                "start_time": start_time,
-                "results": [],
-                "errors": []
-            }
-
-            # Xử lý streaming
             async for result in scraper.get_multiple_metadata_streaming(request.urls, mode=config.mode):
                 url = result["url"]
                 data = result["data"]
@@ -112,24 +118,17 @@ class FacebookScraperController:
                         "error": data.get('error', 'Unknown error')
                     })
 
-            response["end_time"] = time.time()
-            response["total_time"] = response["end_time"] - start_time
-            response["successful_count"] = sum(1 for r in response["results"]
-                                            if r["data"].get('success', False))
-            response["failed_count"] = len(request.urls) - response["successful_count"]
-
-            return response
-
         except Exception as e:
             logger.error(f"Error in method_streaming: {str(e)}")
-            return {
-                "method": "streaming",
-                "success": False,
-                "error": str(e),
-                "start_time": start_time,
-                "end_time": time.time(),
-                "total_time": time.time() - start_time
-            }
+            raise SocialScrapingFailedException(request.urls[0] if request.urls else "", "facebook", str(e))
+
+        response["end_time"] = time.time()
+        response["total_time"] = response["end_time"] - start_time
+        response["successful_count"] = sum(1 for r in response["results"]
+                                        if r["data"].get('success', False))
+        response["failed_count"] = len(request.urls) - response["successful_count"]
+
+        return response
 
     # =============================================
     # PHƯƠNG PHÁP 2: Batch Processing
@@ -141,74 +140,67 @@ class FacebookScraperController:
         """
         start_time = time.time()
 
-        try:
-            # Khởi tạo scraper
-            config = ScraperConfig(
-                headless=request.headless,
-                max_concurrent=request.max_concurrent,
-                cache_ttl=request.cache_ttl,
-                enable_images=request.enable_images,
-                mode=request.mode  # Use mode from request if available
-            )
-            scraper = await self.init_scraper(config)
+        # Validate URLs first
+        for url in request.urls:
+            if not url.startswith(('http://', 'https://')):
+                raise InvalidSocialURLException(url, "facebook")
+        
+        # Khởi tạo scraper
+        config = ScraperConfig(
+            headless=request.headless,
+            max_concurrent=request.max_concurrent,
+            cache_ttl=request.cache_ttl,
+            enable_images=request.enable_images,
+            mode=request.mode  # Use mode from request if available
+        )
+        scraper = await self.init_scraper(config)
 
-            # Thực hiện batch scraping
-            batch_size = request.batch_size or config.max_concurrent
-            results = await scraper.get_multiple_metadata(request.urls, mode=config.mode, batch_size=batch_size)
+        # Thực hiện batch scraping
+        batch_size = request.batch_size or config.max_concurrent
+        results = await scraper.get_multiple_metadata(request.urls, mode=config.mode, batch_size=batch_size)
 
-            # Chuẩn bị response
-            response = {
-                "method": "batch",
-                "success": True,
-                "total_urls": len(request.urls),
-                "batch_size": batch_size,
-                "mode": config.mode,  # Include mode in response
-                "start_time": start_time,
-                "results": {},
-                "summary": {},
-                "errors": []
-            }
+        # Chuẩn bị response
+        response = {
+            "method": "batch",
+            "success": True,
+            "total_urls": len(request.urls),
+            "batch_size": batch_size,
+            "mode": config.mode,  # Include mode in response
+            "start_time": start_time,
+            "results": {},
+            "summary": {},
+            "errors": []
+        }
 
-            # Xử lý results
-            successful_count = 0
-            failed_count = 0
+        # Xử lý results
+        successful_count = 0
+        failed_count = 0
 
-            for url, data in results.items():
-                serializable_data = make_serializable(data)
-                response["results"][url] = serializable_data
+        for url, data in results.items():
+            serializable_data = make_serializable(data)
+            response["results"][url] = serializable_data
 
-                if data.get('success', False):
-                    successful_count += 1
-                else:
-                    failed_count += 1
-                    response["errors"].append({
-                        "url": url,
-                        "error": data.get('error', 'Unknown error')
-                    })
+            if data.get('success', False):
+                successful_count += 1
+            else:
+                failed_count += 1
+                response["errors"].append({
+                    "url": url,
+                    "error": data.get('error', 'Unknown error')
+                })
 
-            response["end_time"] = time.time()
-            response["total_time"] = response["end_time"] - start_time
+        response["end_time"] = time.time()
+        response["total_time"] = response["end_time"] - start_time
 
-            response["summary"] = {
-                "successful": successful_count,
-                "failed": failed_count,
-                "cache_hits": sum(1 for data in results.values() if data.get('from_cache', False)),
-                "cache_misses": sum(1 for data in results.values() if not data.get('from_cache', False)),
-                "avg_scrape_time": sum(data.get('scrape_time', 0) for data in results.values()) / len(results) if results else 0
-            }
+        response["summary"] = {
+            "successful": successful_count,
+            "failed": failed_count,
+            "cache_hits": sum(1 for data in results.values() if data.get('from_cache', False)),
+            "cache_misses": sum(1 for data in results.values() if not data.get('from_cache', False)),
+            "avg_scrape_time": sum(data.get('scrape_time', 0) for data in results.values()) / len(results) if results else 0
+        }
 
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in method_batch: {str(e)}")
-            return {
-                "method": "batch",
-                "success": False,
-                "error": str(e),
-                "start_time": start_time,
-                "end_time": time.time(),
-                "total_time": time.time() - start_time
-            }
+        return response
 
     # =============================================
     # PHƯƠNG PHÁP 3: Single URL
@@ -217,33 +209,22 @@ class FacebookScraperController:
         """Scrape một URL duy nhất"""
         start_time = time.time()
 
-        try:
-            scraper = await self.init_scraper(config)
-            # Use the mode from config when calling get_facebook_metadata
-            result = await scraper.get_facebook_metadata(url, mode=config.mode)
+        if not url.startswith(('http://', 'https://')):
+            raise InvalidSocialURLException(url, "facebook")
+        
+        scraper = await self.init_scraper(config)
+        # Use the mode from config when calling get_facebook_metadata
+        result = await scraper.get_facebook_metadata(url, mode=config.mode)
 
-            response = {
-                "method": "single",
-                "success": True,
-                "url": url,
-                "mode": config.mode,  # Include mode in response
-                "start_time": start_time,
-                "end_time": time.time(),
-                "total_time": time.time() - start_time,
-                "data": make_serializable(result)
-            }
+        response = {
+            "method": "single",
+            "success": True,
+            "url": url,
+            "mode": config.mode,  # Include mode in response
+            "start_time": start_time,
+            "end_time": time.time(),
+            "total_time": time.time() - start_time,
+            "data": make_serializable(result)
+        }
 
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in method_single: {str(e)}")
-            return {
-                "method": "single",
-                "success": False,
-                "url": url,
-                "mode": config.mode,  # Include mode in response
-                "error": str(e),
-                "start_time": start_time,
-                "end_time": time.time(),
-                "total_time": time.time() - start_time
-            }
+        return response
